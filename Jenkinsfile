@@ -11,17 +11,23 @@ pipeline {
             }
         }
 
-        stage('Backend Dependencies') {
+       
+stage('Backend Dependencies') {
     steps {
         dir('backend') {
             withEnv([
-                'PYTHON=C:\\Users\\MANISH RAGVENDRA C U\\AppData\\Local\\Programs\\Python\\Python311\\python.exe'
+                'PYTHON=C:\\Users\\MANISH RAGVENDRA C U\\AppData\\Local\\Programs\\Python\\Python311\\python.exe',
+                'GYP_MSVS_VERSION=2026'
             ]) {
-                bat 'npm install'
+                bat '''
+                    call "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat"
+                    npm install
+                '''
             }
         }
     }
 }
+
 
         stage('Backend Tests') {
             steps {
