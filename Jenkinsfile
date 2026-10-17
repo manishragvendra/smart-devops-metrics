@@ -2,17 +2,7 @@
 pipeline {
     agent any
 
-    environment {
-        SONAR_HOST_URL = 'http://localhost:9000'
-    }
-
     stages {
-        stage('Checkout') {
-            steps {
-                echo 'Source code is available locally.'
-            }
-        }
-
         stage('Verify Environment') {
             steps {
                 bat 'node --version'
@@ -21,10 +11,17 @@ pipeline {
             }
         }
 
-        stage('Backend Checks') {
+        stage('Backend Dependencies') {
             steps {
                 dir('backend') {
                     bat 'npm install'
+                }
+            }
+        }
+
+        stage('Backend Tests') {
+            steps {
+                dir('backend') {
                     bat 'npm test --if-present'
                 }
             }
@@ -36,9 +33,11 @@ pipeline {
                     credentialsId: 'sonarqube-token',
                     variable: 'SONAR_TOKEN'
                 )]) {
-                    bat '''
-                    "C:\\sonar-scanner\\sonar-scanner-8.1.0.6389-windows-x64\\bin\\sonar-scanner.bat"
-                    '''
+                    withEnv(['SONAR_HOST_URL=http://localhost:9000']) {
+                        bat '''
+                        "C:\\sonar-scanner\\sonar-scanner-8.1.0.6389-windows-x64\\bin\\sonar-scanner.bat"
+                        '''
+                    }
                 }
             }
         }
@@ -46,10 +45,10 @@ pipeline {
 
     post {
         success {
-            echo 'Build and SonarQube analysis completed.'
+            echo 'GitHub checkout, backend checks, and SonarQube analysis completed.'
         }
         failure {
-            echo 'Pipeline failed. Check the stage logs.'
+            echo 'Pipeline failed. Review Console Output.'
         }
     }
 }
