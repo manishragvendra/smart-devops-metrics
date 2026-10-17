@@ -12,12 +12,16 @@ pipeline {
         }
 
         stage('Backend Dependencies') {
-            steps {
-                dir('backend') {
-                    bat 'npm install'
-                }
+    steps {
+        dir('backend') {
+            withEnv([
+                'PYTHON=C:\\Users\\MANISH RAGVENDRA C U\\AppData\\Local\\Programs\\Python\\Python311\\python.exe'
+            ]) {
+                bat 'npm install'
             }
         }
+    }
+}
 
         stage('Backend Tests') {
             steps {
