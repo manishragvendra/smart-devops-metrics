@@ -12,12 +12,14 @@ pipeline {
         }
 
        
+
+
 stage('Backend Dependencies') {
     steps {
         dir('backend') {
             withEnv([
                 'PYTHON=C:\\Users\\MANISH RAGVENDRA C U\\AppData\\Local\\Programs\\Python\\Python311\\python.exe',
-                'GYP_MSVS_VERSION=2026'
+                'npm_config_node_gyp=C:\\Users\\MANISH RAGVENDRA C U\\AppData\\Roaming\\npm\\node_modules\\node-gyp\\bin\\node-gyp.js'
             ]) {
                 bat '''
                     call "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat"
@@ -27,6 +29,8 @@ stage('Backend Dependencies') {
         }
     }
 }
+
+
 
 
         stage('Backend Tests') {
