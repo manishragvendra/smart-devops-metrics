@@ -1,0 +1,35 @@
+
+# Dependencies
+node_modules/
+backend/node_modules/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+
+# Scanner and build output
+.scannerwork/
+**/coverage/
+**/dist/
+**/build/
+
+# Local database and generated files
+database/*.db
+database/*.db-*
+backend/database/*.db
+*.log
+
+# Python
+__pycache__/
+.venv/
+venv/
+*.pyc
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
