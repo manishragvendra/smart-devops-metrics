@@ -14,21 +14,27 @@ pipeline {
        
 
 
+
 stage('Backend Dependencies') {
     steps {
         dir('backend') {
             withEnv([
-                'PYTHON=C:\\Users\\MANISH RAGVENDRA C U\\AppData\\Local\\Programs\\Python\\Python311\\python.exe',
-                'npm_config_node_gyp=C:\\Users\\MANISH RAGVENDRA C U\\AppData\\Roaming\\npm\\node_modules\\node-gyp\\bin\\node-gyp.js'
+                'PYTHON=C:\\Users\\MANISH RAGVENDRA C U\\AppData\\Local\\Programs\\Python\\Python311\\python.exe'
             ]) {
                 bat '''
                     call "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat"
-                    npm install
+                    npm install --ignore-scripts
+                    if errorlevel 1 exit /b 1
+
+                    cd node_modules\\better-sqlite3
+                    node "C:\\Users\\MANISH RAGVENDRA C U\\AppData\\Roaming\\npm\\node_modules\\node-gyp\\bin\\node-gyp.js" rebuild
+                    if errorlevel 1 exit /b 1
                 '''
             }
         }
     }
 }
+
 
 
 
