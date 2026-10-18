@@ -354,6 +354,12 @@ app.get("/api/jenkins/history", (req, res) => {
  // 9. ML failure prediction
  // --------------------------------------------------
 
+/* --------------------------------------------------
+   ML failure prediction and latest prediction storage
+-------------------------------------------------- */
+
+let latestJenkinsPrediction = null;
+
 app.post("/api/ml/predict", async (req, res) => {
   try {
     const {
@@ -367,6 +373,9 @@ app.post("/api/ml/predict", async (req, res) => {
       time_since_last_commit,
       repo,
       event,
+      commit,
+      repository,
+      buildNumber,
     } = req.body;
 
     const payload = {
@@ -398,6 +407,19 @@ app.post("/api/ml/predict", async (req, res) => {
       });
     }
 
+    // Save predictions sent by Jenkins.
+    // Manual predictions without commit/build metadata are not saved here.
+    if (commit || buildNumber) {
+      latestJenkinsPrediction = {
+        commit: commit || null,
+        repository: repository || repo || null,
+        buildNumber: buildNumber || null,
+        generatedAt: new Date().toISOString(),
+        metadata: payload,
+        prediction: result,
+      };
+    }
+
     return res.json({
       message: "Failure prediction generated successfully",
       prediction: result,
@@ -411,6 +433,15 @@ app.post("/api/ml/predict", async (req, res) => {
     });
   }
 });
+
+// Retrieve the latest prediction generated from a Jenkins commit.
+app.get("/api/ml/latest-prediction", (req, res) => {
+  res.json({
+    available: latestJenkinsPrediction !== null,
+    latestPrediction: latestJenkinsPrediction,
+  });
+});
+
 
 
 

@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -59,6 +58,7 @@ function calculateScores(metrics) {
     return { qrs: null, rrs: null };
   }
 
+  // Illustrative Quality Risk Score, not an official SonarQube score.
   const bugRisk = Math.min(Number(metrics.bugs ?? 0) * 5, 100);
   const vulnerabilityRisk = Math.min(
     Number(metrics.vulnerabilities ?? 0) * 15,
@@ -72,7 +72,6 @@ function calculateScores(metrics) {
     Number(metrics.duplication ?? 0) * 5,
     100
   );
-
   const coverage = Number(metrics.coverage ?? 0);
 
   const qrs = Math.round(
@@ -122,16 +121,10 @@ function App() {
   const [jenkinsHistory, setJenkinsHistory] = useState([]);
   const [jenkinsHistoryError, setJenkinsHistoryError] = useState("");
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [sonarError, setSonarError] = useState("");
-  const [jenkinsError, setJenkinsError] = useState("");
-
-  // ML prediction state. These initial values are examples.
+  // Experimental ML failure prediction state.
   const [mlPrediction, setMlPrediction] = useState(null);
   const [mlLoading, setMlLoading] = useState(false);
   const [mlError, setMlError] = useState("");
-
   const [mlInputs, setMlInputs] = useState({
     additions: "73",
     deletions: "14",
@@ -144,8 +137,81 @@ function App() {
     event: "push",
   });
 
-  async function fetchMetrics() {
-    setLoading(true);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [sonarError, setSonarError] = useState("");
+  const [jenkinsError, setJenkinsError] = useState("");
+
+  async function predictFailure(event) {
+    event.preventDefault();
+    setMlLoading(true);
+    setMlError("");
+    setMlPrediction(null);
+
+    const additions = Number(mlInputs.additions);
+    const deletions = Number(mlInputs.deletions);
+
+    const payload = {
+      additions,
+      deletions,
+      total_churn: additions + deletions,
+      files_modified: Number(mlInputs.files_modified),
+      msg_len: Number(mlInputs.msg_len),
+      is_merge: Number(mlInputs.is_merge),
+      num_parents: Number(mlInputs.num_parents),
+      time_since_last_commit: Number(mlInputs.time_since_last_commit),
+      repo: mlInputs.repo.trim(),
+      event: mlInputs.event,
+    };
+
+    try {
+      const response = await fetch(`${API_URL}/api/ml/predict`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        const detail = data.details?.detail;
+
+        const validationMessage = Array.isArray(detail)
+          ? detail
+              .map((item) => `${item.loc?.join(".")}: ${item.msg}`)
+              .join("; ")
+          : null;
+
+        throw new Error(
+          validationMessage ||
+            data.error ||
+            "Could not generate a prediction."
+        );
+      }
+
+      if (
+        !data.prediction ||
+        typeof data.prediction.failure_probability !== "number"
+      ) {
+        throw new Error("The ML API returned an unexpected response.");
+      }
+
+      setMlPrediction(data.prediction);
+    } catch (err) {
+      setMlError(
+        err.message || "Unable to reach the ML prediction API."
+      );
+    } finally {
+      setMlLoading(false);
+    }
+  }
+
+  async function fetchMetrics(backgroundRefresh = false) {
+    // Do not show the full-page loading state during automatic refreshes.
+    if (!backgroundRefresh) {
+      setLoading(true);
+    }
+
     setError("");
     setSonarError("");
     setJenkinsError("");
@@ -163,7 +229,7 @@ function App() {
       fetch(`${API_URL}/api/jenkins/history?projectId=${PROJECT_ID}`),
     ]);
 
-    // SQLite metrics.
+    // 1. Load SQLite snapshot data.
     try {
       if (databaseResult.status === "rejected") {
         throw new Error("Cannot connect to the SQLite backend.");
@@ -180,16 +246,18 @@ function App() {
       setProject(data.project || null);
 
       const snapshots = Array.isArray(data.metrics) ? data.metrics : [];
+
       setMetrics(snapshots.length > 0 ? snapshots[0] : null);
     } catch (err) {
       setError(
         `${err.message || "Unable to load delivery metrics"}. Make sure the backend is running on port 5000.`
       );
+
       setMetrics(null);
       setProject(null);
     }
 
-    // Live SonarQube metrics.
+    // 2. Load live SonarQube quality metrics.
     try {
       if (sonarResult.status === "rejected") {
         throw new Error("Cannot connect to the SonarQube API.");
@@ -213,7 +281,7 @@ function App() {
       setSonarMetrics(null);
     }
 
-    // Live Jenkins metrics.
+    // 3. Load live Jenkins build metrics.
     try {
       if (jenkinsResult.status === "rejected") {
         throw new Error("Cannot connect to the Jenkins API.");
@@ -237,7 +305,7 @@ function App() {
       setJenkinsMetrics(null);
     }
 
-    // Persisted Jenkins build history.
+    // 4. Load persisted Jenkins build history from SQLite.
     try {
       if (historyResult.status === "rejected") {
         throw new Error("Cannot connect to the Jenkins history API.");
@@ -254,7 +322,9 @@ function App() {
       const data = await response.json();
 
       if (!Array.isArray(data.history)) {
-        throw new Error("Jenkins history API returned an invalid response.");
+        throw new Error(
+          "Jenkins history API returned an invalid response."
+        );
       }
 
       setJenkinsHistory(data.history);
@@ -262,91 +332,27 @@ function App() {
       setJenkinsHistoryError(
         err.message || "Unable to load saved Jenkins build history."
       );
+
       setJenkinsHistory([]);
     } finally {
-      setLoading(false);
+      if (!backgroundRefresh) {
+        setLoading(false);
+      }
     }
   }
 
-  // Call the Express ML endpoint, which forwards the request to FastAPI.
-  async function predictFailure(event) {
-    event.preventDefault();
-
-    setMlLoading(true);
-    setMlError("");
-    setMlPrediction(null);
-
-    const additions = Number(mlInputs.additions);
-    const deletions = Number(mlInputs.deletions);
-
-    const payload = {
-      additions,
-      deletions,
-      total_churn: additions + deletions,
-      files_modified: Number(mlInputs.files_modified),
-      msg_len: Number(mlInputs.msg_len),
-      is_merge: Number(mlInputs.is_merge),
-      num_parents: Number(mlInputs.num_parents),
-      time_since_last_commit: Number(
-        mlInputs.time_since_last_commit
-      ),
-      repo: mlInputs.repo.trim(),
-      event: mlInputs.event,
-    };
-
-    try {
-      const response = await fetch(`${API_URL}/api/ml/predict`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        const detail = data.details?.detail;
-
-        const validationMessage = Array.isArray(detail)
-          ? detail
-              .map(
-                (item) =>
-                  `${item.loc?.join(".")}: ${item.msg}`
-              )
-              .join("; ")
-          : null;
-
-        throw new Error(
-          validationMessage ||
-            data.error ||
-            "Could not generate prediction."
-        );
-      }
-
-      const result = data.prediction;
-
-      if (
-        !result?.prediction ||
-        !Number.isFinite(Number(result.failure_probability))
-      ) {
-        throw new Error("The prediction API returned an unexpected response.");
-      }
-
-      setMlPrediction(result);
-    } catch (err) {
-      setMlError(
-        err.message || "Unable to generate a prediction."
-      );
-    } finally {
-      setMlLoading(false);
-    }
-  }
-
+  // Fetch immediately, then refresh dashboard metrics every 30 seconds.
   useEffect(() => {
     fetchMetrics();
+
+    const intervalId = window.setInterval(() => {
+      fetchMetrics(true);
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
   }, []);
 
+  // Combine SQLite and SonarQube values.
   const displayMetrics = useMemo(
     () => ({
       ...(metrics || {}),
@@ -463,6 +469,7 @@ function App() {
     ];
   }, [metrics, sonarMetrics, jenkinsMetrics, jenkinsError]);
 
+  // Percentage chart.
   const chartData = useMemo(() => {
     const data = [];
 
@@ -502,6 +509,7 @@ function App() {
     );
   }, [metrics, sonarMetrics, jenkinsMetrics]);
 
+  // Historical build durations from records saved in SQLite.
   const buildDurationData = useMemo(
     () =>
       [...jenkinsHistory]
@@ -579,14 +587,6 @@ function App() {
       alignItems: "center",
       gap: 8,
     },
-    input: {
-      padding: 11,
-      border: "1px solid #d9e1ed",
-      borderRadius: 8,
-      fontSize: 14,
-      width: "100%",
-      boxSizing: "border-box",
-    },
   };
 
   return (
@@ -608,13 +608,7 @@ function App() {
             <h1 style={{ fontSize: 22, margin: 0 }}>
               Smart DevOps Intelligence
             </h1>
-            <p
-              style={{
-                margin: "5px 0 0",
-                color: "#c2cce0",
-                fontSize: 13,
-              }}
-            >
+            <p style={{ margin: "5px 0 0", color: "#c2cce0", fontSize: 13 }}>
               Software Quality & Metrics Platform
             </p>
           </div>
@@ -623,7 +617,7 @@ function App() {
         <button
           style={styles.button}
           disabled={loading}
-          onClick={fetchMetrics}
+          onClick={() => fetchMetrics()}
         >
           <RefreshCw size={16} />
           {loading ? "Refreshing..." : "Refresh Metrics"}
@@ -650,7 +644,7 @@ function App() {
             <p style={{ ...styles.muted, margin: 0 }}>
               Project ID: {PROJECT_ID}
               {metrics?.created_at
-                ? ` · Latest SQLite snapshot: ${metrics.created_at}`
+                ? ` • Latest SQLite snapshot: ${metrics.created_at}`
                 : ""}
             </p>
           </div>
@@ -671,6 +665,7 @@ function App() {
             ) : (
               <CheckCircle2 size={17} color="#16a34a" />
             )}
+
             <span style={{ fontSize: 13, fontWeight: 600 }}>
               {error
                 ? "SQLite API Error"
@@ -898,7 +893,7 @@ function App() {
           </div>
         </section>
 
-        {/* Percentage chart and SonarQube health */}
+        {/* Quality and delivery chart */}
         <section
           style={{
             display: "grid",
@@ -909,6 +904,7 @@ function App() {
         >
           <div style={styles.card}>
             <h3 style={styles.sectionTitle}>Quality & Delivery Overview</h3>
+
             <p style={styles.muted}>
               Available percentage metrics from SonarQube, Jenkins, and the
               SQLite snapshot. Unavailable metrics are omitted.
@@ -1015,6 +1011,7 @@ function App() {
                         <Icon size={18} color="#68758b" />
                         <span>{item.label}</span>
                       </div>
+
                       <strong>{item.value}</strong>
                     </div>
                   );
@@ -1040,6 +1037,7 @@ function App() {
           <h3 style={styles.sectionTitle}>
             Historical Jenkins Build Duration
           </h3>
+
           <p style={styles.muted}>
             Build durations from Jenkins records saved in SQLite. Lower
             durations indicate faster builds; this chart shows duration, not
@@ -1102,9 +1100,10 @@ function App() {
           </p>
         </section>
 
-        {/* Recent Jenkins build history */}
+        {/* Recent Jenkins build history table */}
         <section style={{ ...styles.card, marginBottom: 30 }}>
           <h3 style={styles.sectionTitle}>Recent Jenkins Build History</h3>
+
           <p style={styles.muted}>
             Build results retrieved from your Jenkins pipeline.
           </p>
@@ -1146,6 +1145,7 @@ function App() {
                     )}
                   </tr>
                 </thead>
+
                 <tbody>
                   {jenkinsMetrics.builds.map((build) => (
                     <tr key={build.number}>
@@ -1157,6 +1157,7 @@ function App() {
                       >
                         #{build.number}
                       </td>
+
                       <td
                         style={{
                           padding: 12,
@@ -1170,6 +1171,7 @@ function App() {
                       >
                         {build.result}
                       </td>
+
                       <td
                         style={{
                           padding: 12,
@@ -1180,6 +1182,7 @@ function App() {
                           ? `${(build.duration / 1000).toFixed(1)} sec`
                           : "N/A"}
                       </td>
+
                       <td
                         style={{
                           padding: 12,
@@ -1199,22 +1202,23 @@ function App() {
           )}
         </section>
 
-        {/* AI-powered CI/CD failure prediction */}
+        {/* Experimental ML failure prediction */}
         <section style={{ ...styles.card, marginBottom: 30 }}>
           <h3 style={styles.sectionTitle}>
             AI-Powered CI/CD Failure Prediction
           </h3>
+
           <p style={styles.muted}>
-            Estimate workflow failure risk using commit metadata. This model
-            was trained on public GitHub Actions data and has not been validated
-            on this project's Jenkins history.
+            Enter commit and workflow metadata to request an experimental
+            prediction. The model was trained on public GitHub Actions data
+            and has not been validated against this project's Jenkins builds.
           </p>
 
           <form onSubmit={predictFailure}>
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                 gap: 16,
                 marginBottom: 20,
               }}
@@ -1224,6 +1228,7 @@ function App() {
                 ["deletions", "Code Deletions"],
                 ["files_modified", "Files Modified"],
                 ["msg_len", "Commit Message Length"],
+                ["is_merge", "Is Merge (0 or 1)"],
                 ["num_parents", "Number of Parents"],
                 ["time_since_last_commit", "Seconds Since Last Commit"],
               ].map(([key, label]) => (
@@ -1241,33 +1246,24 @@ function App() {
                         [key]: event.target.value,
                       }))
                     }
-                    style={styles.input}
+                    style={{
+                      padding: 11,
+                      border: "1px solid #d9e1ed",
+                      borderRadius: 8,
+                      fontSize: 14,
+                      width: "100%",
+                      boxSizing: "border-box",
+                    }}
                   />
                 </label>
               ))}
-
-              <label style={{ display: "grid", gap: 6 }}>
-                <span style={styles.muted}>Is Merge?</span>
-                <select
-                  value={mlInputs.is_merge}
-                  onChange={(event) =>
-                    setMlInputs((previous) => ({
-                      ...previous,
-                      is_merge: event.target.value,
-                    }))
-                  }
-                  style={styles.input}
-                >
-                  <option value="0">No</option>
-                  <option value="1">Yes</option>
-                </select>
-              </label>
 
               <label style={{ display: "grid", gap: 6 }}>
                 <span style={styles.muted}>Repository</span>
                 <input
                   type="text"
                   required
+                  maxLength={300}
                   value={mlInputs.repo}
                   onChange={(event) =>
                     setMlInputs((previous) => ({
@@ -1275,7 +1271,13 @@ function App() {
                       repo: event.target.value,
                     }))
                   }
-                  style={styles.input}
+                  style={{
+                    padding: 11,
+                    border: "1px solid #d9e1ed",
+                    borderRadius: 8,
+                    width: "100%",
+                    boxSizing: "border-box",
+                  }}
                 />
               </label>
 
@@ -1289,7 +1291,13 @@ function App() {
                       event: event.target.value,
                     }))
                   }
-                  style={styles.input}
+                  style={{
+                    padding: 11,
+                    border: "1px solid #d9e1ed",
+                    borderRadius: 8,
+                    width: "100%",
+                    boxSizing: "border-box",
+                  }}
                 >
                   <option value="push">Push</option>
                   <option value="pull_request">Pull Request</option>
@@ -1302,10 +1310,7 @@ function App() {
             <button
               type="submit"
               disabled={mlLoading}
-              style={{
-                ...styles.button,
-                opacity: mlLoading ? 0.7 : 1,
-              }}
+              style={styles.button}
             >
               {mlLoading ? "Predicting..." : "Predict Build Failure"}
             </button>
@@ -1314,27 +1319,36 @@ function App() {
           {mlError && (
             <div
               role="alert"
-              style={{ marginTop: 18, color: "#b91c1c" }}
+              style={{
+                marginTop: 18,
+                padding: 12,
+                border: "1px solid #fecaca",
+                borderRadius: 8,
+                color: "#b91c1c",
+                background: "#fff7f7",
+              }}
             >
-              <strong>Prediction failed.</strong>
-              <p style={{ marginBottom: 0 }}>{mlError}</p>
+              {mlError}
             </div>
           )}
 
           {mlPrediction && (
             <div
+              aria-live="polite"
               style={{
                 marginTop: 24,
                 padding: 20,
                 background: "#f5f7fb",
+                border: "1px solid #e5eaf2",
                 borderRadius: 12,
               }}
             >
               <p style={styles.muted}>Predicted Outcome</p>
+
               <h2
                 style={{
                   fontSize: 28,
-                  margin: "8px 0 12px",
+                  margin: "8px 0",
                   color:
                     mlPrediction.prediction === "Failure"
                       ? "#dc2626"
@@ -1345,16 +1359,29 @@ function App() {
               </h2>
 
               <p>
-                Estimated Failure Probability:{" "}
+                Estimated failure probability:{" "}
                 <strong>
                   {(
-                    Number(mlPrediction.failure_probability) * 100
+                    Math.min(
+                      1,
+                      Math.max(0, mlPrediction.failure_probability)
+                    ) * 100
                   ).toFixed(2)}
                   %
                 </strong>
               </p>
 
               <div
+                role="progressbar"
+                aria-label="Estimated failure probability"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(
+                  Math.min(
+                    1,
+                    Math.max(0, mlPrediction.failure_probability)
+                  ) * 100
+                )}
                 style={{
                   height: 12,
                   background: "#e2e8f0",
@@ -1366,10 +1393,7 @@ function App() {
                   style={{
                     width: `${Math.min(
                       100,
-                      Math.max(
-                        0,
-                        Number(mlPrediction.failure_probability) * 100
-                      )
+                      Math.max(0, mlPrediction.failure_probability * 100)
                     )}%`,
                     height: "100%",
                     background: "#dc2626",
@@ -1386,21 +1410,10 @@ function App() {
                 }}
               >
                 {mlPrediction.warning ||
-                  "Experimental prediction; use as an estimate, not a guarantee."}
+                  "Experimental estimate only; not validated on this project's Jenkins history."}
               </p>
             </div>
           )}
-
-          <p
-            style={{
-              ...styles.muted,
-              marginBottom: 0,
-              marginTop: 16,
-            }}
-          >
-            Initial form values are examples. Replace them with real commit
-            metadata before using predictions to guide decisions.
-          </p>
         </section>
 
         {/* Data sources and recommendations */}
@@ -1418,6 +1431,7 @@ function App() {
               }}
             >
               <CheckCircle2 size={20} color="#16856b" />
+
               <div>
                 <strong>SonarQube API</strong>
                 <p style={{ ...styles.muted, margin: "5px 0 0" }}>
@@ -1436,6 +1450,7 @@ function App() {
               }}
             >
               <Database size={20} color="#536b99" />
+
               <div>
                 <strong>Express API and SQLite</strong>
                 <p style={{ ...styles.muted, margin: "5px 0 0" }}>
@@ -1454,19 +1469,23 @@ function App() {
               }}
             >
               <GitBranch size={20} color="#536b99" />
+
               <div>
                 <strong>Jenkins delivery metrics</strong>
+
                 <p style={{ ...styles.muted, margin: "5px 0 0" }}>
                   {jenkinsMetrics
                     ? `Connected to ${jenkinsMetrics.jobName}. Retrieved ${jenkinsMetrics.totalBuilds} builds, with ${formatNumber(jenkinsMetrics.buildSuccessRate)}% success rate.`
                     : "Jenkins build history and delivery metrics are not available yet."}
                 </p>
+
                 <p style={{ ...styles.muted, margin: "5px 0 0" }}>
                   Build success rate is calculated from the builds returned by
                   Jenkins. Deployment frequency, lead time, change failure rate,
                   and recovery time require additional deployment or incident
                   records.
                 </p>
+
                 {jenkinsMetrics?.fetchedAt && (
                   <p style={{ ...styles.muted, margin: "5px 0 0" }}>
                     Last fetched:{" "}
@@ -1484,12 +1503,14 @@ function App() {
               }}
             >
               <ArrowDownRight size={20} color="#68758b" />
+
               <div>
                 <strong>Machine-learning predictions</strong>
                 <p style={{ ...styles.muted, margin: "5px 0 0" }}>
-                  The FastAPI model is connected through the Express prediction
-                  endpoint. Predictions use public GitHub Actions training data
-                  and remain experimental.
+                  The experimental prediction form above calls the Express API
+                  and FastAPI model. Inputs are currently entered manually;
+                  automatic GitHub commit metadata integration is a separate
+                  integration step.
                 </p>
               </div>
             </div>
