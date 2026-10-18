@@ -1,0 +1,114 @@
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+:root {
+  font-family: 'DM Sans', sans-serif;
+  color: #202a3b;
+  background: #f5f7fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button { font: inherit; }
+.app-shell { min-height: 100vh; }
+.sidebar {
+  width: 245px; background: #151e31; color: #d9e0ef;
+  position: fixed; inset: 0 auto 0 0; padding: 28px 18px;
+  display: flex; flex-direction: column;
+}
+.brand { display: flex; gap: 12px; align-items: center; padding: 0 7px 36px; }
+.brand-icon {
+  display: grid; place-items: center; width: 42px; height: 42px;
+  border-radius: 12px; background: #526ff0; color: white;
+}
+.brand strong { display: block; color: white; font: 800 17px Manrope, sans-serif; }
+.brand small { display: block; color: #8f9bb2; font-size: 11px; margin-top: 3px; }
+.nav-heading { color: #7887a1; font-size: 10px; letter-spacing: 1.6px; padding-left: 10px; }
+.nav-item {
+  display: flex; align-items: center; gap: 12px; padding: 12px 13px;
+  border-radius: 9px; margin: 3px 0; color: #aab6cb; font-size: 13px;
+}
+.nav-item.active { background: #293a5a; color: white; }
+.sidebar-footer {
+  margin-top: auto; border-top: 1px solid #303b50; padding: 20px 7px 0;
+  font-size: 12px; display: flex; align-items: center; gap: 7px;
+}
+.sidebar-footer small { display: block; color: #8f9bb2; margin-left: 4px; }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #e7aa4d; }
+.status-dot.online { background: #36c995; }
+.main-content { margin-left: 245px; padding: 34px 38px 22px; max-width: 1800px; }
+.topbar { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
+.eyebrow, .panel-label { color: #6279d8; font-size: 10px; letter-spacing: 1.5px; font-weight: 700; }
+h1, h2, h3, p { margin-top: 0; }
+h1 {
+  font: 800 27px Manrope, sans-serif;
+  margin: 8px 0;
+  letter-spacing: -.8px;
+  color: #202a3b;
+}
+.subtitle, .section-heading p, .panel-heading p { color: #8993a5; font-size: 12px; margin-bottom: 0; }
+.header-status { display: flex; align-items: flex-end; flex-direction: column; gap: 8px; }
+.status-pill { display: flex; align-items: center; gap: 7px; padding: 8px 12px; background: white; border: 1px solid #e8ebf2; border-radius: 20px; font-size: 11px; }
+.status-pill.connected { color: #188d68; }
+.updated { color: #8b95a6; font-size: 10px; }
+.welcome-panel {
+  margin: 28px 0; padding: 25px 28px; border-radius: 15px;
+  background: linear-gradient(110deg, #253b6a, #435cc1);
+  color: white; display: flex; align-items: center; justify-content: space-between;
+}
+.welcome-panel .panel-label { color: #b6c8ff; }
+.welcome-panel h2 { font: 700 20px Manrope, sans-serif; margin: 9px 0; }
+.welcome-panel p { color: #d0d9f4; font-size: 12px; margin: 0; }
+.health-icon { color: #d4ddff; padding: 15px; background: #ffffff18; border-radius: 15px; }
+.section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.section-heading h2 { font: 700 17px Manrope, sans-serif; margin-bottom: 5px; }
+.demo-tag { font-size: 10px; color: #9a6b20; background: #fff3d8; border-radius: 6px; padding: 7px 10px; }
+.metrics-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 13px; }
+.metric-card, .panel { background: white; border: 1px solid #e9edf4; border-radius: 12px; }
+.metric-card { padding: 16px; min-width: 0; }
+.metric-card-top { display: flex; justify-content: space-between; align-items: center; }
+.metric-icon, .panel-icon { width: 34px; height: 34px; border-radius: 9px; background: #edf1ff; color: #5872e4; display: grid; place-items: center; }
+.metric-period { color: #a0a8b6; font-size: 9px; }
+.metric-name { color: #778195; font-size: 11px; margin: 15px 0 8px; min-height: 28px; }
+.metric-value { font: 800 24px Manrope, sans-serif; white-space: nowrap; }
+.metric-value span { font: 500 10px 'DM Sans', sans-serif; color: #7e899c; margin-left: 3px; }
+.metric-note { font-size: 9px; color: #9ba4b3; margin: 10px 0 0; }
+.analysis-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 16px; margin-top: 22px; }
+.panel { padding: 21px; }
+.panel-heading { display: flex; justify-content: space-between; align-items: center; }
+.panel-heading h3 { font: 700 14px Manrope, sans-serif; margin: 0 0 5px; }
+.chart-area { height: 225px; margin-top: 22px; }
+.score-row { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; border-bottom: 1px solid #edf0f5; }
+.score-row span { display: block; font: 700 14px Manrope, sans-serif; }
+.score-row div small { display: block; color: #8b95a6; font-size: 10px; margin-top: 4px; }
+.score-row strong { font: 800 22px Manrope, sans-serif; }
+.score-row strong small { font-size: 10px; color: #8b95a6; }
+.notice { display: flex; align-items: flex-start; gap: 9px; background: #fff7e7; color: #9a702c; padding: 12px; border-radius: 8px; font-size: 10px; line-height: 1.5; margin-top: 18px; }
+.page-footer { display: flex; justify-content: space-between; gap: 12px; color: #9aa3b1; font-size: 10px; padding: 25px 2px 0; }
+.page-footer span:last-child { display: flex; align-items: center; gap: 6px; }
+@media (max-width: 1250px) { .metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 850px) {
+  .sidebar { width: 68px; padding: 20px 10px; }
+  .brand { padding: 0 0 28px; justify-content: center; }
+  .brand > div:last-child, .nav-heading, .nav-item:not(.active), .nav-item.active { font-size: 0; }
+  .nav-item { justify-content: center; padding: 13px 0; }
+  .sidebar-footer { font-size: 0; justify-content: center; padding: 15px 0; }
+  .sidebar-footer small { display: none; }
+  .main-content { margin-left: 68px; padding: 25px 18px; }
+  .analysis-grid { grid-template-columns: 1fr; }
+  .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .topbar { flex-direction: column; }
+  .header-status { align-items: flex-start; }
+}
+@media (max-width: 480px) {
+  .metrics-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .metric-card { padding: 12px; }
+  .metric-value { font-size: 20px; }
+  .welcome-panel { padding: 20px; }
+  .health-icon { display: none; }
+}
+.section-heading h2 {
+  color: #202a3b;
+}

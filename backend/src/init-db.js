@@ -36,8 +36,24 @@ db.exec(`
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (project_id) REFERENCES projects(id)
   );
+
+  CREATE TABLE IF NOT EXISTS jenkins_builds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    job_name TEXT NOT NULL,
+    build_number INTEGER NOT NULL,
+    result TEXT NOT NULL,
+    duration_ms INTEGER,
+    build_timestamp INTEGER,
+    recorded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+
+    UNIQUE (project_id, job_name, build_number)
+  );
 `);
 
 console.log("Database initialized successfully.");
+console.log("Jenkins build history table is ready.");
 
 db.close();
