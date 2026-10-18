@@ -188,13 +188,23 @@ Write-Host 'Prediction saved to ml-prediction.json'
             }
         }
 
-        stage('Backend Tests') {
-            steps {
-                dir('backend') {
-                    bat 'npm test --if-present'
-                }
-            }
+        
+
+stage('Backend Tests') {
+    steps {
+        dir('backend') {
+            bat 'npm test'
         }
+    }
+    post {
+        always {
+            junit testResults: 'backend/test-results/junit.xml',
+                  allowEmptyResults: false
+        }
+    }
+}
+
+
 
         stage('SonarQube Analysis') {
             steps {

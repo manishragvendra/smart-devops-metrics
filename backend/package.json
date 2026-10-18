@@ -4,10 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-  "start": "node src/server.js",
-  "dev": "nodemon src/server.js",
-  "init-db": "node src/init-db.js"
-},
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "init-db": "node src/init-db.js",
+    "test": "jest --runInBand"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -19,7 +20,20 @@
     "express": "^5.3.0"
   },
   "devDependencies": {
+    "jest": "^30.2.0",
+    "jest-junit": "^17.0.0",
     "nodemon": "^3.1.14"
+  },
+  "jest": {
+    "reporters": [
+      "default",
+      [
+        "jest-junit",
+        {
+          "outputDirectory": "test-results",
+          "outputName": "junit.xml"
+        }
+      ]
+    ]
   }
 }
-
