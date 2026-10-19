@@ -1,1 +1,5 @@
-function test() { return true; }
+function test() {
+  return true;
+}
+
+module.exports = { test };

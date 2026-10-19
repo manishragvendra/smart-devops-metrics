@@ -203,6 +203,20 @@ stage('Backend Tests') {
         }
     }
 }
+       stage('Source Code Coverage') {
+    steps {
+        dir('backend') {
+            bat 'npx jest --config .\\jest.source-coverage.config.cjs --runInBand --no-cache'
+        }
+        powershell '''
+            $report = "coverage-source/lcov.info"
+            (Get-Content $report) -replace '^SF:.*example\\.js$', 'SF:source-code/example.js' |
+                Set-Content -Encoding ascii $report
+            Write-Host "Corrected LCOV source path:"
+            Select-String '^SF:' $report
+        '''
+    }
+}
 
 
 
