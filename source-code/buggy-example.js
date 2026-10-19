@@ -1,6 +1,6 @@
 
 function calculateTotal(price, quantity) {
-  // Bug 1: Uses assignment instead of comparison
+  // Bug 1: Assignment instead of comparison
   if (quantity = 0) {
     return 0;
   }
@@ -10,7 +10,7 @@ function calculateTotal(price, quantity) {
 }
 
 function getUserName(user) {
-  // Bug 3: May throw an error when user is null
+  // Bug 3: Accessing a property without checking for null
   return user.name.toUpperCase();
 }
 
@@ -19,6 +19,14 @@ function divideNumbers(a, b) {
   return a / b;
 }
 
+function testUnusedVariable() {
+  // Bug 5: Unused variable
+  const unusedValue = 100;
+  return true;
+}
+
+// Execute the functions
 console.log(calculateTotal(100, 2));
 console.log(getUserName(null));
 console.log(divideNumbers(10, 0));
+console.log(testUnusedVariable());
