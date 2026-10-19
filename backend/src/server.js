@@ -6,16 +6,40 @@ const cors = require("cors");
 const db = require("./database");
 const { getSonarMetrics } = require("../services/sonarService");
 const { getJenkinsMetrics } = require("../services/jenkinsService");
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://127.0.0.1:8000";
+
+const ML_SERVICE_URL =
+  process.env.ML_SERVICE_URL || "http://127.0.0.1:8000";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 // --------------------------------------------------
-// 1. Basic API and health check
+// 1. Create persistent ML prediction history table
+// --------------------------------------------------
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ml_prediction_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    commit_sha TEXT,
+    repository TEXT,
+    build_number TEXT,
+    generated_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    prediction TEXT NOT NULL,
+    failure_probability REAL,
+    threshold REAL,
+    model_type TEXT,
+    warning TEXT
+  );
+`);
+
+console.log("ML prediction history table is ready.");
+
+// --------------------------------------------------
+// 2. Basic API and health check
 // --------------------------------------------------
 
 app.get("/", (req, res) => {
@@ -26,14 +50,25 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({
-    status: "healthy",
-    database: "connected",
-  });
+  try {
+    db.prepare("SELECT 1").get();
+
+    res.json({
+      status: "healthy",
+      database: "connected",
+    });
+  } catch (error) {
+    console.error("Health check error:", error.message);
+
+    res.status(500).json({
+      status: "unhealthy",
+      database: "error",
+    });
+  }
 });
 
 // --------------------------------------------------
-// 2. Get all projects
+// 3. Get all projects
 // --------------------------------------------------
 
 app.get("/api/projects", (req, res) => {
@@ -50,7 +85,7 @@ app.get("/api/projects", (req, res) => {
 });
 
 // --------------------------------------------------
-// 3. Create a project
+// 4. Create a project
 // --------------------------------------------------
 
 app.post("/api/projects", (req, res) => {
@@ -82,7 +117,7 @@ app.post("/api/projects", (req, res) => {
 });
 
 // --------------------------------------------------
-// 4. Get metrics for a specific project
+// 5. Get metrics for a specific project
 // --------------------------------------------------
 
 app.get("/api/projects/:id/metrics", (req, res) => {
@@ -118,8 +153,7 @@ app.get("/api/projects/:id/metrics", (req, res) => {
 });
 
 // --------------------------------------------------
-// 5. Get latest metrics for the specified project
-//    Defaults to project ID 2.
+// 6. Get latest metrics for a project
 // --------------------------------------------------
 
 app.get("/api/metrics", (req, res) => {
@@ -164,7 +198,7 @@ app.get("/api/metrics", (req, res) => {
 });
 
 // --------------------------------------------------
-// 6. Save a metrics snapshot for a project
+// 7. Save a metrics snapshot
 // --------------------------------------------------
 
 app.post("/api/projects/:id/metrics", (req, res) => {
@@ -227,9 +261,15 @@ app.post("/api/projects/:id/metrics", (req, res) => {
       vulnerabilities < 0 ||
       code_smells < 0 ||
       complexity < 0 ||
-      [coverage, duplication, build_success_rate, test_pass_rate,
-        deployment_success_rate, security_score, maintainability_score]
-        .some((value) => value < 0 || value > 100)
+      [
+        coverage,
+        duplication,
+        build_success_rate,
+        test_pass_rate,
+        deployment_success_rate,
+        security_score,
+        maintainability_score,
+      ].some((value) => value < 0 || value > 100)
     ) {
       return res.status(400).json({
         error: "Metric values are outside their allowed ranges",
@@ -271,13 +311,25 @@ app.post("/api/projects/:id/metrics", (req, res) => {
 });
 
 // --------------------------------------------------
-// 7. Retrieve live metrics from SonarQube
+// 8. Retrieve live SonarQube metrics
 // --------------------------------------------------
+app.get("/api/debug/jenkins", async (req, res) => {
+  try {
+    const metrics = await getJenkinsMetrics();
 
+    res.json({
+      serviceFile: require.resolve("../services/jenkinsService"),
+      hasTestMetrics: Object.hasOwn(metrics, "testMetrics"),
+      testMetrics: metrics.testMetrics ?? null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 app.get("/api/sonar/metrics", async (req, res) => {
   try {
     const metrics = await getSonarMetrics();
-
+    console.log("Defect density from running service:", metrics.defect_density);
     res.json({
       message: "SonarQube metrics retrieved successfully",
       metrics,
@@ -291,13 +343,23 @@ app.get("/api/sonar/metrics", async (req, res) => {
     });
   }
 });
+
+// --------------------------------------------------
+// 9. Retrieve live Jenkins metrics
+// --------------------------------------------------
+
 app.get("/api/jenkins/metrics", async (req, res) => {
   try {
     const metrics = await getJenkinsMetrics();
 
+    console.log("Jenkins test metrics:", metrics.testMetrics);
+
     res.json({
       message: "Jenkins metrics retrieved successfully",
-      metrics,
+      metrics: {
+        ...metrics,
+        testMetrics: metrics.testMetrics ?? null,
+      },
     });
   } catch (error) {
     console.error("Jenkins metrics error:", error.message);
@@ -308,11 +370,12 @@ app.get("/api/jenkins/metrics", async (req, res) => {
     });
   }
 });
+// --------------------------------------------------
+// 10. Retrieve saved Jenkins build history
+// --------------------------------------------------
 
 app.get("/api/jenkins/history", (req, res) => {
   try {
-    const db = require("./database");
-
     const projectId = Number(req.query.projectId || 2);
 
     if (!Number.isInteger(projectId) || projectId < 1) {
@@ -350,15 +413,25 @@ app.get("/api/jenkins/history", (req, res) => {
   }
 });
 
- // --------------------------------------------------
- // 9. ML failure prediction
- // --------------------------------------------------
+// --------------------------------------------------
+// 11. Generate and permanently save ML predictions
+// --------------------------------------------------
 
-/* --------------------------------------------------
-   ML failure prediction and latest prediction storage
--------------------------------------------------- */
-
-let latestJenkinsPrediction = null;
+const savePrediction = db.prepare(`
+  INSERT INTO ml_prediction_history (
+    commit_sha,
+    repository,
+    build_number,
+    generated_at,
+    metadata_json,
+    prediction,
+    failure_probability,
+    threshold,
+    model_type,
+    warning
+  )
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
 
 app.post("/api/ml/predict", async (req, res) => {
   try {
@@ -407,17 +480,31 @@ app.post("/api/ml/predict", async (req, res) => {
       });
     }
 
-    // Save predictions sent by Jenkins.
-    // Manual predictions without commit/build metadata are not saved here.
+    // Only persist predictions carrying Jenkins build or commit metadata.
+    // Manual predictions continue to work without entering Jenkins history.
     if (commit || buildNumber) {
-      latestJenkinsPrediction = {
-        commit: commit || null,
-        repository: repository || repo || null,
-        buildNumber: buildNumber || null,
-        generatedAt: new Date().toISOString(),
-        metadata: payload,
-        prediction: result,
-      };
+      const generatedAt = new Date().toISOString();
+      const repositoryName = repository || repo || null;
+      const build = buildNumber == null ? null : String(buildNumber);
+
+      savePrediction.run(
+        commit || null,
+        repositoryName,
+        build,
+        generatedAt,
+        JSON.stringify(payload),
+        result.prediction || "Unknown",
+        Number.isFinite(result.failure_probability)
+          ? result.failure_probability
+          : null,
+        Number.isFinite(result.threshold) ? result.threshold : null,
+        result.model_type || null,
+        result.warning || null
+      );
+
+      console.log(
+        `Saved ML prediction for Jenkins build ${build || "unknown"}`
+      );
     }
 
     return res.json({
@@ -428,27 +515,121 @@ app.post("/api/ml/predict", async (req, res) => {
     console.error("ML prediction error:", error.message);
 
     return res.status(502).json({
-      error: "Unable to reach the ML prediction service",
+      error: "Unable to reach the ML prediction service or save its result",
       details: error.message,
     });
   }
 });
 
-// Retrieve the latest prediction generated from a Jenkins commit.
+// --------------------------------------------------
+// 12. Retrieve the latest Jenkins prediction
+//     Data survives backend restarts.
+// --------------------------------------------------
+
 app.get("/api/ml/latest-prediction", (req, res) => {
-  res.json({
-    available: latestJenkinsPrediction !== null,
-    latestPrediction: latestJenkinsPrediction,
-  });
+  try {
+    const row = db
+      .prepare(`
+        SELECT *
+        FROM ml_prediction_history
+        ORDER BY id DESC
+        LIMIT 1
+      `)
+      .get();
+
+    if (!row) {
+      return res.json({
+        available: false,
+        latestPrediction: null,
+      });
+    }
+
+    const latestPrediction = {
+      id: row.id,
+      commit: row.commit_sha,
+      repository: row.repository,
+      buildNumber: row.build_number,
+      generatedAt: row.generated_at,
+      metadata: JSON.parse(row.metadata_json),
+      prediction: {
+        prediction: row.prediction,
+        failure_probability: row.failure_probability,
+        threshold: row.threshold,
+        model_type: row.model_type,
+        warning: row.warning,
+      },
+    };
+
+    res.json({
+      available: true,
+      latestPrediction,
+    });
+  } catch (error) {
+    console.error("Latest ML prediction error:", error.message);
+
+    res.status(500).json({
+      error: "Failed to retrieve the latest ML prediction",
+    });
+  }
 });
 
-
-
-
 // --------------------------------------------------
-// 8. Start server AFTER registering all routes
+// 13. Retrieve ML prediction history
 // --------------------------------------------------
 
+app.get("/api/ml/prediction-history", (req, res) => {
+  try {
+    const requestedLimit = Number(req.query.limit || 20);
+    const limit = Math.min(100, Math.max(1, requestedLimit));
+
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
+      return res.status(400).json({
+        error: "limit must be a positive integer",
+      });
+    }
+
+    const rows = db
+      .prepare(`
+        SELECT *
+        FROM ml_prediction_history
+        ORDER BY id DESC
+        LIMIT ?
+      `)
+      .all(limit);
+
+    const history = rows.map((row) => ({
+      id: row.id,
+      commit: row.commit_sha,
+      repository: row.repository,
+      buildNumber: row.build_number,
+      generatedAt: row.generated_at,
+      metadata: JSON.parse(row.metadata_json),
+      prediction: {
+        prediction: row.prediction,
+        failure_probability: row.failure_probability,
+        threshold: row.threshold,
+        model_type: row.model_type,
+        warning: row.warning,
+      },
+    }));
+
+    res.json({
+      total: history.length,
+      history,
+    });
+  } catch (error) {
+    console.error("ML prediction history error:", error.message);
+
+    res.status(500).json({
+      error: "Failed to retrieve ML prediction history",
+    });
+  }
+});
+
+// --------------------------------------------------
+// 14. Start the server after registering all routes
+// --------------------------------------------------
+console.log("DEBUG ROUTE FILE LOADED:", __filename);
 app.listen(PORT, () => {
   console.log(`Backend running at http://localhost:${PORT}`);
 });

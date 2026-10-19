@@ -1,5 +1,6 @@
 
 const path = require("path");
+
 require("dotenv").config({
   path: path.join(__dirname, "../.env"),
   override: true,
@@ -17,42 +18,29 @@ const JENKINS_JOB_NAME =
   process.env.JENKINS_JOB_NAME ||
   "Smart-DevOps-Metrics-Pipeline";
 
-// This is the existing project ID in your SQLite database.
 const PROJECT_ID = 2;
 
-async function getJenkinsMetrics() {
-  if (!JENKINS_USER || !JENKINS_API_TOKEN) {
-    throw new Error(
-      "JENKINS_USER or JENKINS_API_TOKEN is missing from backend/.env"
-    );
-  }
-
-  const jobPath = JENKINS_JOB_NAME
+function getJobPath() {
+  return JENKINS_JOB_NAME
     .split("/")
     .map((part) => `job/${encodeURIComponent(part)}`)
     .join("/");
+}
 
-  const url = new URL(
-    `${jobPath}/api/json`,
-    JENKINS_URL.endsWith("/")
-      ? JENKINS_URL
-      : `${JENKINS_URL}/`
-  );
-
-  url.searchParams.set(
-    "tree",
-    "name,lastBuild[number,result],builds[number,result,timestamp,duration]"
-  );
-
+function getJenkinsAuthHeaders() {
   const auth = Buffer.from(
     `${JENKINS_USER}:${JENKINS_API_TOKEN}`
   ).toString("base64");
 
+  return {
+    Authorization: `Basic ${auth}`,
+    Accept: "application/json",
+  };
+}
+
+async function fetchJenkinsJson(url) {
   const response = await fetch(url, {
-    headers: {
-      Authorization: `Basic ${auth}`,
-      Accept: "application/json",
-    },
+    headers: getJenkinsAuthHeaders(),
   });
 
   if (!response.ok) {
@@ -61,7 +49,114 @@ async function getJenkinsMetrics() {
     );
   }
 
-  const job = await response.json();
+  return response.json();
+}
+
+async function getLatestTestMetrics(jobPath, latestBuildNumber) {
+  if (!latestBuildNumber) {
+    return {
+      buildNumber: null,
+      totalTests: null,
+      passedTests: null,
+      failedTests: null,
+      skippedTests: null,
+      testPassRate: null,
+      available: false,
+      message: "No Jenkins build is available.",
+    };
+  }
+
+  const reportUrl = new URL(
+    `${jobPath}/${latestBuildNumber}/testReport/api/json`,
+    JENKINS_URL.endsWith("/")
+      ? JENKINS_URL
+      : `${JENKINS_URL}/`
+  );
+
+  // Use the exact field names returned by Jenkins JUnit API.
+  reportUrl.searchParams.set(
+    "tree",
+    "passCount,failCount,skipCount"
+  );
+
+  try {
+    const report = await fetchJenkinsJson(reportUrl);
+
+    const passedTests = Number(report.passCount);
+    const failedTests = Number(report.failCount);
+    const skippedTests = Number(report.skipCount);
+
+    if (
+      !Number.isInteger(passedTests) ||
+      !Number.isInteger(failedTests) ||
+      !Number.isInteger(skippedTests) ||
+      passedTests < 0 ||
+      failedTests < 0 ||
+      skippedTests < 0
+    ) {
+      throw new Error("Jenkins returned invalid test counts.");
+    }
+
+    const totalTests =
+      passedTests + failedTests + skippedTests;
+
+    // Skipped tests are excluded from the pass-rate denominator.
+    const executedTests = passedTests + failedTests;
+
+    const testPassRate =
+      executedTests > 0
+        ? Number(
+            ((passedTests / executedTests) * 100).toFixed(2)
+          )
+        : null;
+
+    return {
+      buildNumber: latestBuildNumber,
+      totalTests,
+      passedTests,
+      failedTests,
+      skippedTests,
+      testPassRate,
+      available: true,
+      fetchedAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    // Missing test reports must not break build metrics.
+    return {
+      buildNumber: latestBuildNumber,
+      totalTests: null,
+      passedTests: null,
+      failedTests: null,
+      skippedTests: null,
+      testPassRate: null,
+      available: false,
+      message: `Test report unavailable: ${error.message}`,
+    };
+  }
+}
+
+async function getJenkinsMetrics() {
+  if (!JENKINS_USER || !JENKINS_API_TOKEN) {
+    throw new Error(
+      "JENKINS_USER or JENKINS_API_TOKEN is missing from backend/.env"
+    );
+  }
+
+  const jobPath = getJobPath();
+
+  const jobUrl = new URL(
+    `${jobPath}/api/json`,
+    JENKINS_URL.endsWith("/")
+      ? JENKINS_URL
+      : `${JENKINS_URL}/`
+  );
+
+  jobUrl.searchParams.set(
+    "tree",
+    "name,lastBuild[number,result],builds[number,result,timestamp,duration]"
+  );
+
+  const job = await fetchJenkinsJson(jobUrl);
 
   const builds = (job.builds || [])
     .filter(
@@ -76,8 +171,6 @@ async function getJenkinsMetrics() {
       timestamp: build.timestamp ?? null,
     }));
 
-  // Prepare an SQLite upsert statement.
-  // Existing builds are updated rather than duplicated.
   const saveBuild = db.prepare(`
     INSERT INTO jenkins_builds (
       project_id,
@@ -95,7 +188,6 @@ async function getJenkinsMetrics() {
       build_timestamp = excluded.build_timestamp
   `);
 
-  // Save all retrieved builds in one transaction.
   const saveBuildsTransaction = db.transaction((items) => {
     for (const build of items) {
       saveBuild.run(
@@ -128,12 +220,20 @@ async function getJenkinsMetrics() {
         )
       : null;
 
+  const latestBuildNumber = job.lastBuild?.number ?? null;
+
+  const testMetrics = await getLatestTestMetrics(
+    jobPath,
+    latestBuildNumber
+  );
+
   return {
     jobName: job.name,
     totalBuilds,
     successfulBuilds,
     failedBuilds,
     buildSuccessRate,
+    testMetrics,
     builds,
     fetchedAt: new Date().toISOString(),
   };

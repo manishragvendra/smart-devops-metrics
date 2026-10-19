@@ -53,61 +53,137 @@ function formatNumber(value, digits = 1) {
   return Number.isFinite(number) ? number.toFixed(digits) : "N/A";
 }
 
-function calculateScores(metrics) {
-  if (!metrics) {
-    return { qrs: null, rrs: null };
+function toFiniteNumber(value) {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+// SonarQube ratings are ordinal: 1 is best and 5 is worst.
+// Convert them to an illustrative 0-100 score for the dashboard.
+function ratingToScore(rating) {
+  const value = toFiniteNumber(rating);
+  if (value == null || value < 1 || value > 5) return null;
+  return Math.round(100 - ((value - 1) * 20));
+}
+
+function weightedAverage(components) {
+  const available = components.filter(
+    (component) => component.value != null && Number.isFinite(component.value)
+  );
+
+  if (available.length === 0) {
+    return {
+      score: null,
+      available: 0,
+      total: components.length,
+    };
   }
 
-  // Illustrative Quality Risk Score, not an official SonarQube score.
-  const bugRisk = Math.min(Number(metrics.bugs ?? 0) * 5, 100);
-  const vulnerabilityRisk = Math.min(
-    Number(metrics.vulnerabilities ?? 0) * 15,
-    100
-  );
-  const complexityRisk = Math.min(
-    Number(metrics.complexity ?? 0) * 2,
-    100
-  );
-  const duplicationRisk = Math.min(
-    Number(metrics.duplication ?? 0) * 5,
-    100
-  );
-  const coverage = Number(metrics.coverage ?? 0);
-
-  const qrs = Math.round(
-    100 -
-      (0.3 * bugRisk +
-        0.2 * vulnerabilityRisk +
-        0.2 * complexityRisk +
-        0.15 * duplicationRisk +
-        0.15 * (100 - coverage))
+  const totalWeight = available.reduce(
+    (sum, item) => sum + item.weight,
+    0
   );
 
-  const hasRrsInputs =
-    metrics.coverage != null &&
-    metrics.build_success_rate != null &&
-    metrics.deployment_success_rate != null &&
-    metrics.security_score != null &&
-    metrics.maintainability_score != null;
-
-  const rrs = hasRrsInputs
-    ? Math.round(
-        0.25 * Number(metrics.coverage) +
-          0.2 * Number(metrics.build_success_rate) +
-          0.2 * Number(metrics.deployment_success_rate) +
-          0.2 * Number(metrics.security_score) +
-          0.15 * Number(metrics.maintainability_score)
-      )
-    : null;
+  const score =
+    available.reduce(
+      (sum, item) => sum + item.value * item.weight,
+      0
+    ) / totalWeight;
 
   return {
-    qrs: Math.max(0, Math.min(100, qrs)),
-    rrs: rrs == null ? null : Math.max(0, Math.min(100, rrs)),
+    score: Math.max(0, Math.min(100, Math.round(score))),
+    available: available.length,
+    total: components.length,
+  };
+}
+
+function calculateScores(metrics, jenkinsMetrics) {
+  const bugCount = toFiniteNumber(metrics?.bugs);
+  const vulnerabilityCount = toFiniteNumber(metrics?.vulnerabilities);
+  const complexity = toFiniteNumber(metrics?.complexity);
+  const duplication = toFiniteNumber(metrics?.duplication);
+  const coverage = toFiniteNumber(metrics?.coverage);
+
+  const buildSuccessRate = toFiniteNumber(
+    jenkinsMetrics?.buildSuccessRate
+  );
+
+  const deploymentSuccessRate = toFiniteNumber(
+    metrics?.deployment_success_rate ?? metrics?.deploymentSuccessRate
+  );
+
+  // QRS: higher is better. Missing inputs are excluded and remaining weights
+  // are normalized, rather than pretending missing values are zero.
+  const qrsComponents = [
+    {
+      value: bugCount == null ? null : 100 - Math.min(bugCount * 5, 100),
+      weight: 0.30,
+    },
+    {
+      value:
+        vulnerabilityCount == null
+          ? null
+          : 100 - Math.min(vulnerabilityCount * 15, 100),
+      weight: 0.20,
+    },
+    {
+      value:
+        complexity == null
+          ? null
+          : 100 - Math.min(complexity * 2, 100),
+      weight: 0.20,
+    },
+    {
+      value:
+        duplication == null
+          ? null
+          : 100 - Math.min(duplication * 5, 100),
+      weight: 0.15,
+    },
+    {
+      value:
+        coverage == null
+          ? null
+          : Math.max(0, Math.min(100, coverage)),
+      weight: 0.15,
+    },
+  ];
+
+  const qrsResult = weightedAverage(qrsComponents);
+
+  // RRS: partial score from real available inputs. Deployment success is
+  // included only if it exists in the SQLite metrics snapshot.
+  const securityScore =
+    toFiniteNumber(metrics?.security_score) ??
+    ratingToScore(metrics?.security_rating);
+
+  const maintainabilityScore =
+    toFiniteNumber(metrics?.maintainability_score) ??
+    ratingToScore(metrics?.maintainability_rating);
+
+  const rrsComponents = [
+    { value: coverage, weight: 0.25 },
+    { value: buildSuccessRate, weight: 0.20 },
+    { value: deploymentSuccessRate, weight: 0.20 },
+    { value: securityScore, weight: 0.20 },
+    { value: maintainabilityScore, weight: 0.15 },
+  ];
+
+  const rrsResult = weightedAverage(rrsComponents);
+
+  return {
+    qrs: qrsResult.score,
+    qrsInputsAvailable: qrsResult.available,
+    qrsInputsTotal: qrsResult.total,
+    rrs: rrsResult.score,
+    rrsInputsAvailable: rrsResult.available,
+    rrsInputsTotal: rrsResult.total,
   };
 }
 
 function scoreLabel(score) {
-  if (score === null) return "Waiting for data";
+  if (score == null) return "Waiting for data";
   if (score >= 80) return "Good";
   if (score >= 60) return "Moderate";
   return "Needs improvement";
@@ -125,9 +201,18 @@ function App() {
   const [mlPrediction, setMlPrediction] = useState(null);
   const [mlLoading, setMlLoading] = useState(false);
   const [mlError, setMlError] = useState("");
+
   // Latest prediction generated automatically by the Jenkins pipeline.
   const [latestJenkinsPrediction, setLatestJenkinsPrediction] = useState(null);
   const [latestPredictionError, setLatestPredictionError] = useState("");
+
+  // Persisted history of Jenkins-generated ML predictions.
+  const [predictionHistory, setPredictionHistory] = useState([]);
+  const [predictionHistoryTotal, setPredictionHistoryTotal] = useState(0);
+  const [predictionHistoryLoading, setPredictionHistoryLoading] =
+    useState(false);
+  const [predictionHistoryError, setPredictionHistoryError] = useState("");
+
   const [mlInputs, setMlInputs] = useState({
     additions: "73",
     deletions: "14",
@@ -284,7 +369,7 @@ function App() {
       setSonarMetrics(null);
     }
 
-    // 3. Load live Jenkins build metrics.
+    // 3. Load live Jenkins build metrics, including test report metrics.
     try {
       if (jenkinsResult.status === "rejected") {
         throw new Error("Cannot connect to the Jenkins API.");
@@ -348,26 +433,78 @@ function App() {
   async function fetchLatestJenkinsPrediction() {
     try {
       const response = await fetch(`${API_URL}/api/ml/latest-prediction`);
+
       if (!response.ok) {
-        throw new Error(`Latest prediction API returned HTTP ${response.status}`);
+        throw new Error(
+          `Latest prediction API returned HTTP ${response.status}`
+        );
       }
 
       const data = await response.json();
-      setLatestJenkinsPrediction(data.available ? data.latestPrediction : null);
+
+      setLatestJenkinsPrediction(
+        data.available ? data.latestPrediction : null
+      );
+
       setLatestPredictionError("");
     } catch (err) {
-      setLatestPredictionError(err.message || "Unable to load the latest Jenkins prediction.");
+      setLatestPredictionError(
+        err.message || "Unable to load the latest Jenkins prediction."
+      );
     }
   }
 
-  // Fetch immediately, then refresh metrics and Jenkins prediction every 30 seconds.
+  // Load persisted ML prediction history from SQLite through the Express API.
+  async function fetchPredictionHistory() {
+    setPredictionHistoryLoading(true);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/api/ml/prediction-history?limit=50`
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Prediction history API returned HTTP ${response.status}`
+        );
+      }
+
+      const data = await response.json();
+
+      if (!Array.isArray(data.history)) {
+        throw new Error(
+          "Prediction history API returned an invalid response."
+        );
+      }
+
+      setPredictionHistory(data.history);
+
+      setPredictionHistoryTotal(
+        Number.isFinite(Number(data.total))
+          ? Number(data.total)
+          : data.history.length
+      );
+
+      setPredictionHistoryError("");
+    } catch (err) {
+      setPredictionHistoryError(
+        err.message || "Unable to load saved ML prediction history."
+      );
+    } finally {
+      setPredictionHistoryLoading(false);
+    }
+  }
+
+  // Fetch immediately, then refresh metrics and prediction data every 30 seconds.
   useEffect(() => {
     fetchMetrics();
     fetchLatestJenkinsPrediction();
+    fetchPredictionHistory();
 
     const intervalId = window.setInterval(() => {
       fetchMetrics(true);
       fetchLatestJenkinsPrediction();
+      fetchPredictionHistory();
     }, 30000);
 
     return () => window.clearInterval(intervalId);
@@ -383,8 +520,8 @@ function App() {
   );
 
   const scores = useMemo(
-    () => calculateScores(displayMetrics),
-    [displayMetrics]
+    () => calculateScores(displayMetrics, jenkinsMetrics),
+    [displayMetrics, jenkinsMetrics]
   );
 
   // Dashboard metric cards.
@@ -408,10 +545,21 @@ function App() {
       },
       {
         label: "Defect Density",
-        value: "N/A",
-        unit: "",
+        value:
+          sonarMetrics?.bugs != null && sonarMetrics?.lines_of_code > 0
+            ? formatNumber(
+                (Number(sonarMetrics.bugs) /
+                  Number(sonarMetrics.lines_of_code)) *
+                  1000,
+                2
+              )
+            : "N/A",
+        unit: " bugs/KLOC",
         icon: AlertTriangle,
-        source: "Not calculated",
+        source:
+          sonarMetrics?.bugs != null && sonarMetrics?.lines_of_code > 0
+            ? `${sonarMetrics.bugs} SonarQube bugs per 1,000 lines of code`
+            : "Requires SonarQube bug count and lines of code",
       },
       {
         label: "Code Complexity",
@@ -439,31 +587,79 @@ function App() {
       },
       {
         label: "Deployment Frequency",
-        value: "N/A",
-        unit: "",
+        value:
+          metrics?.deployment_frequency != null ||
+          metrics?.deploymentFrequency != null
+            ? formatNumber(
+                metrics.deployment_frequency ??
+                  metrics.deploymentFrequency,
+                2
+              )
+            : "N/A",
+        unit: " deployments/day",
         icon: Rocket,
-        source: "Deployment events not yet integrated",
+        source:
+          metrics?.deployment_frequency != null ||
+          metrics?.deploymentFrequency != null
+            ? "From saved deployment records"
+            : "Not available: deployment events are not integrated (Jenkins builds are not deployments)",
       },
       {
         label: "Lead Time for Changes",
-        value: "N/A",
-        unit: "",
+        value:
+          metrics?.lead_time_for_changes != null ||
+          metrics?.leadTimeForChanges != null
+            ? formatNumber(
+                metrics.lead_time_for_changes ??
+                  metrics.leadTimeForChanges,
+                2
+              )
+            : "N/A",
+        unit: " hours",
         icon: Clock,
-        source: "Commit and deployment timestamps required",
+        source:
+          metrics?.lead_time_for_changes != null ||
+          metrics?.leadTimeForChanges != null
+            ? "From commit-to-deployment timestamps"
+            : "Requires commit and deployment timestamps",
       },
       {
         label: "Change Failure Rate",
-        value: "N/A",
+        value:
+          metrics?.change_failure_rate != null ||
+          metrics?.changeFailureRate != null
+            ? formatNumber(
+                metrics.change_failure_rate ??
+                  metrics.changeFailureRate,
+                2
+              )
+            : "N/A",
         unit: "%",
         icon: XCircle,
-        source: "Deployment failure records required",
+        source:
+          metrics?.change_failure_rate != null ||
+          metrics?.changeFailureRate != null
+            ? "From failed deployment records"
+            : "Requires deployment outcome records; build failures alone are not change failures",
       },
       {
         label: "Mean Time to Recovery",
-        value: "N/A",
-        unit: "",
+        value:
+          metrics?.mean_time_to_recovery != null ||
+          metrics?.meanTimeToRecovery != null
+            ? formatNumber(
+                metrics.mean_time_to_recovery ??
+                  metrics.meanTimeToRecovery,
+                2
+              )
+            : "N/A",
+        unit: " hours",
         icon: RefreshCw,
-        source: "Incident and recovery timestamps required",
+        source:
+          metrics?.mean_time_to_recovery != null ||
+          metrics?.meanTimeToRecovery != null
+            ? "From incident and recovery timestamps"
+            : "Requires incident start and recovery timestamps",
       },
       {
         label: "Code Vulnerabilities",
@@ -480,17 +676,22 @@ function App() {
       {
         label: "Test Pass Rate",
         value:
-          metrics?.test_pass_rate != null
-            ? formatNumber(metrics.test_pass_rate)
+          jenkinsMetrics?.testMetrics?.available === true &&
+          jenkinsMetrics.testMetrics.testPassRate != null
+            ? formatNumber(jenkinsMetrics.testMetrics.testPassRate)
             : "N/A",
         unit: "%",
         icon: TestTube2,
-        source: "SQLite snapshot",
+        source:
+          jenkinsMetrics?.testMetrics?.available === true
+            ? `Jenkins Build #${jenkinsMetrics.testMetrics.buildNumber}`
+            : "Jenkins test report unavailable",
       },
     ];
   }, [metrics, sonarMetrics, jenkinsMetrics, jenkinsError]);
 
-  // Percentage chart.
+  // Percentage chart using live SonarQube and Jenkins metrics.
+  // Test Pass Rate comes from the latest Jenkins JUnit report, not SQLite.
   const chartData = useMemo(() => {
     const data = [];
 
@@ -508,10 +709,15 @@ function App() {
       });
     }
 
-    if (metrics?.test_pass_rate != null) {
+    const testMetrics = jenkinsMetrics?.testMetrics;
+
+    if (
+      testMetrics?.available === true &&
+      testMetrics.testPassRate != null
+    ) {
       data.push({
         name: "Tests",
-        value: Number(metrics.test_pass_rate),
+        value: Number(testMetrics.testPassRate),
       });
     }
 
@@ -629,7 +835,13 @@ function App() {
             <h1 style={{ fontSize: 22, margin: 0 }}>
               Smart DevOps Intelligence
             </h1>
-            <p style={{ margin: "5px 0 0", color: "#c2cce0", fontSize: 13 }}>
+            <p
+              style={{
+                margin: "5px 0 0",
+                color: "#c2cce0",
+                fontSize: 13,
+              }}
+            >
               Software Quality & Metrics Platform
             </p>
           </div>
@@ -835,8 +1047,11 @@ function App() {
               <span style={styles.muted}>/ 100</span>
             </div>
 
-            <p style={{ marginBottom: 16, color: "#536b99" }}>
+            <p style={{ marginBottom: 8, color: "#536b99" }}>
               {scoreLabel(scores.qrs)}
+            </p>
+            <p style={{ ...styles.muted, marginTop: 0 }}>
+              Inputs used: {scores.qrsInputsAvailable}/{scores.qrsInputsTotal}
             </p>
 
             <div
@@ -858,8 +1073,9 @@ function App() {
             </div>
 
             <p style={{ ...styles.muted, marginTop: 16 }}>
-              Illustrative score derived from source-quality metrics. Higher
-              is better; this is not an official SonarQube score.
+              Illustrative 0–100 score calculated from available SonarQube bug,
+              vulnerability, complexity, duplication, and coverage values.
+              Missing inputs are excluded and remaining weights are normalized.
             </p>
           </div>
 
@@ -885,8 +1101,11 @@ function App() {
               <span style={styles.muted}>/ 100</span>
             </div>
 
-            <p style={{ marginBottom: 16, color: "#16856b" }}>
+            <p style={{ marginBottom: 8, color: "#16856b" }}>
               {scoreLabel(scores.rrs)}
+            </p>
+            <p style={{ ...styles.muted, marginTop: 0 }}>
+              Inputs used: {scores.rrsInputsAvailable}/{scores.rrsInputsTotal}
             </p>
 
             <div
@@ -908,13 +1127,15 @@ function App() {
             </div>
 
             <p style={{ ...styles.muted, marginTop: 16 }}>
-              Requires coverage, build success, deployment success, security,
-              and maintainability inputs. Missing inputs are not guessed.
+              Illustrative 0–100 release-readiness score. Uses coverage, Jenkins
+              build success, deployment success (when available), and security/
+              maintainability ratings. Missing inputs are excluded and the
+              remaining weights are normalized. Security and maintainability
+              ratings are converted from SonarQube's 1–5 scale (1 is best).
             </p>
           </div>
         </section>
-
-        {/* Quality and delivery chart */}
+                {/* Quality and delivery chart */}
         <section
           style={{
             display: "grid",
@@ -927,8 +1148,9 @@ function App() {
             <h3 style={styles.sectionTitle}>Quality & Delivery Overview</h3>
 
             <p style={styles.muted}>
-              Available percentage metrics from SonarQube, Jenkins, and the
-              SQLite snapshot. Unavailable metrics are omitted.
+              Live SonarQube and Jenkins percentage metrics. Test Pass Rate
+              comes from the latest Jenkins JUnit report. Unavailable metrics
+              are omitted.
             </p>
 
             {chartData.length > 0 ? (
@@ -1222,8 +1444,7 @@ function App() {
             </div>
           )}
         </section>
-
-        {/* Latest automatic Jenkins prediction */}
+                {/* Latest automatic Jenkins prediction */}
         <section style={{ ...styles.card, marginBottom: 30 }}>
           <div
             style={{
@@ -1235,12 +1456,15 @@ function App() {
             }}
           >
             <div>
-              <h3 style={styles.sectionTitle}>Latest Jenkins Commit Prediction</h3>
+              <h3 style={styles.sectionTitle}>
+                Latest Jenkins Commit Prediction
+              </h3>
               <p style={styles.muted}>
                 Automatically fetched from the prediction generated by the Jenkins pipeline.
                 This card refreshes every 30 seconds.
               </p>
             </div>
+
             <button
               type="button"
               style={styles.button}
@@ -1251,7 +1475,9 @@ function App() {
           </div>
 
           {latestPredictionError ? (
-            <p role="alert" style={{ color: "#b91c1c" }}>{latestPredictionError}</p>
+            <p role="alert" style={{ color: "#b91c1c" }}>
+              {latestPredictionError}
+            </p>
           ) : latestJenkinsPrediction ? (
             <div style={{ display: "grid", gap: 18, marginTop: 18 }}>
               <div
@@ -1277,6 +1503,7 @@ function App() {
                   </h2>
                   <p style={styles.muted}>Experimental model estimate</p>
                 </div>
+
                 <div style={{ ...styles.card, boxShadow: "none" }}>
                   <p style={styles.muted}>Failure probability</p>
                   <h2 style={{ fontSize: 28, margin: "8px 0" }}>
@@ -1288,6 +1515,7 @@ function App() {
                     Threshold: {latestJenkinsPrediction.prediction?.threshold ?? "N/A"}
                   </p>
                 </div>
+
                 <div style={{ ...styles.card, boxShadow: "none" }}>
                   <p style={styles.muted}>Jenkins build</p>
                   <h2 style={{ fontSize: 28, margin: "8px 0" }}>
@@ -1306,8 +1534,10 @@ function App() {
                 <code style={{ overflowWrap: "anywhere" }}>
                   {latestJenkinsPrediction.commit || "N/A"}
                 </code>
+
                 <p style={{ ...styles.muted, marginTop: 12 }}>
-                  Generated: {latestJenkinsPrediction.generatedAt
+                  Generated:{" "}
+                  {latestJenkinsPrediction.generatedAt
                     ? new Date(latestJenkinsPrediction.generatedAt).toLocaleString()
                     : "N/A"}
                   {latestJenkinsPrediction.prediction?.model_type
@@ -1334,10 +1564,180 @@ function App() {
           ) : (
             <div style={{ marginTop: 16 }}>
               <p style={styles.muted}>
-                No Jenkins-generated prediction is available yet. Run the Jenkins pipeline
-                with the prediction stage and keep the Express and ML services running.
+                No Jenkins-generated prediction is available yet. Run the Jenkins
+                pipeline with the prediction stage and keep the Express and ML
+                services running.
               </p>
             </div>
+          )}
+        </section>
+
+        {/* Persisted ML prediction history */}
+        <section style={{ ...styles.card, marginBottom: 30 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              flexWrap: "wrap",
+              gap: 12,
+            }}
+          >
+            <div>
+              <h3 style={styles.sectionTitle}>ML Prediction History</h3>
+              <p style={styles.muted}>
+                Jenkins-generated predictions saved in SQLite. The latest 50
+                records are shown, and this table refreshes every 30 seconds.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              style={styles.button}
+              onClick={fetchPredictionHistory}
+              disabled={predictionHistoryLoading}
+            >
+              <RefreshCw size={16} />
+              {predictionHistoryLoading ? "Refreshing..." : "Refresh History"}
+            </button>
+          </div>
+
+          {predictionHistoryError ? (
+            <p role="alert" style={{ color: "#b91c1c", marginTop: 16 }}>
+              {predictionHistoryError}
+            </p>
+          ) : predictionHistory.length === 0 ? (
+            <p style={{ ...styles.muted, marginTop: 16 }}>
+              {predictionHistoryLoading
+                ? "Loading saved predictions..."
+                : "No saved ML predictions are available yet. Run the Jenkins pipeline prediction stage to add a record."}
+            </p>
+          ) : (
+            <div style={{ overflowX: "auto", marginTop: 16 }}>
+              <table
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  textAlign: "left",
+                  fontSize: 13,
+                  minWidth: 820,
+                }}
+              >
+                <thead>
+                  <tr style={{ background: "#f5f7fb" }}>
+                    {[
+                      "Build",
+                      "Predicted Outcome",
+                      "Failure Probability",
+                      "Repository",
+                      "Commit SHA",
+                      "Generated At",
+                    ].map((heading) => (
+                      <th
+                        key={heading}
+                        style={{
+                          padding: 12,
+                          borderBottom: "1px solid #e5eaf2",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {predictionHistory.map((item) => {
+                    const probability = item.prediction?.failure_probability;
+                    const isFailure =
+                      item.prediction?.prediction === "Failure";
+
+                    return (
+                      <tr key={item.id ?? `${item.buildNumber}-${item.commit}`}>
+                        <td
+                          style={{
+                            padding: 12,
+                            borderBottom: "1px solid #edf0f5",
+                            whiteSpace: "nowrap",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {item.buildNumber ? `#${item.buildNumber}` : "N/A"}
+                        </td>
+
+                        <td
+                          style={{
+                            padding: 12,
+                            borderBottom: "1px solid #edf0f5",
+                            color: isFailure ? "#dc2626" : "#16856b",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {item.prediction?.prediction || "N/A"}
+                        </td>
+
+                        <td
+                          style={{
+                            padding: 12,
+                            borderBottom: "1px solid #edf0f5",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {typeof probability === "number"
+                            ? `${(probability * 100).toFixed(2)}%`
+                            : "N/A"}
+                        </td>
+
+                        <td
+                          style={{
+                            padding: 12,
+                            borderBottom: "1px solid #edf0f5",
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          {item.repository || "N/A"}
+                        </td>
+
+                        <td
+                          style={{
+                            padding: 12,
+                            borderBottom: "1px solid #edf0f5",
+                            maxWidth: 210,
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          <code>{item.commit || "N/A"}</code>
+                        </td>
+
+                        <td
+                          style={{
+                            padding: 12,
+                            borderBottom: "1px solid #edf0f5",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {item.generatedAt
+                            ? new Date(item.generatedAt).toLocaleString()
+                            : "N/A"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p style={{ ...styles.muted, marginBottom: 0, marginTop: 14 }}>
+            Total saved predictions: {predictionHistoryTotal}
+          </p>
+
+          {predictionHistory.length > 0 && (
+            <p style={{ ...styles.muted, marginBottom: 0, marginTop: 6 }}>
+              Model estimates are experimental and are not guarantees of actual
+              Jenkins build outcomes.
+            </p>
           )}
         </section>
 
