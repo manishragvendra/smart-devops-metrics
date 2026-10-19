@@ -24,6 +24,15 @@ function testUnusedVariable() {
   const unusedValue = 100;
   return true;
 }
+// Intentional code-quality problems for testing
+const unusedFunction = () => "not used";
+
+function calculate(a, b) {
+    if (a = 0) {
+        return 0;
+    }
+    return a - b;
+}
 
 // Execute the functions
 console.log(calculateTotal(100, 2));
