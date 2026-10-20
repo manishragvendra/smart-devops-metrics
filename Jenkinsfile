@@ -34,13 +34,14 @@ pipeline {
                         script: '@git rev-parse HEAD'
                     ).trim()
 
+                    // Double %% because this command runs through Windows bat.
                     env.COMMIT_AT = bat(
                         returnStdout: true,
-                        script: '@git log -1 --format=%cI HEAD'
+                        script: '@git log -1 --format=%%cI HEAD'
                     ).trim()
 
                     echo "Commit: ${env.COMMIT_SHA}"
-                    echo "Commit time: ${env.COMMIT_AT}"
+                    echo "Commit timestamp: ${env.COMMIT_AT}"
                 }
             }
         }
@@ -85,6 +86,7 @@ foreach ($line in $diff) {
     }
 }
 
+# Fallback for commits where diff-tree returned no file changes.
 if ($filesModified -eq 0) {
     $diff = @(git diff --numstat HEAD^ HEAD 2>$null)
 
@@ -123,6 +125,16 @@ if (-not $buildNumber) {
     $buildNumber = 'unknown'
 }
 
+Write-Host '----------------------------------------'
+Write-Host 'Automatic ML Failure Prediction'
+Write-Host "Commit: $commit"
+Write-Host "Repository: $repo"
+Write-Host "Build number: $buildNumber"
+Write-Host "Files changed: $filesModified"
+Write-Host "Additions: $additions"
+Write-Host "Deletions: $deletions"
+Write-Host "Merge commit: $isMerge"
+
 $payloadObject = @{
     additions = $additions
     deletions = $deletions
@@ -141,7 +153,7 @@ $payloadObject = @{
 
 $payload = $payloadObject | ConvertTo-Json -Depth 5
 
-Write-Host 'Requesting ML prediction from Express API...'
+Write-Host 'Requesting prediction from Express API...'
 
 $result = Invoke-RestMethod `
     -Uri $env:ML_API_URL `
@@ -167,7 +179,9 @@ $predictionDocument |
     ConvertTo-Json -Depth 10 |
     Set-Content -Path 'ml-prediction.json' -Encoding UTF8
 
+Write-Host 'ML prediction response:'
 Get-Content 'ml-prediction.json'
+Write-Host 'Prediction saved to ml-prediction.json'
 '''
 
                     bat 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File predict-commit.ps1'
@@ -213,7 +227,7 @@ Get-Content 'ml-prediction.json'
                     (Get-Content $report) -replace '^SF:.*example\\.js$', 'SF:source-code/example.js' |
                         Set-Content -Encoding ascii $report
 
-                    Write-Host "Corrected LCOV source path:"
+                    Write-Host "Coverage source paths:"
                     Select-String '^SF:' $report
                 '''
             }
@@ -278,8 +292,8 @@ if ($listener) {
 }
 
 $process = Start-Process `
-    -FilePath 'npm.cmd' `
-    -ArgumentList @('run', 'preview', '--', '--host', '127.0.0.1', '--port', "$port", '--strictPort') `
+    -FilePath $env:ComSpec `
+    -ArgumentList @('/c', 'npm run preview -- --host 127.0.0.1 --port 4173 --strictPort') `
     -WorkingDirectory $frontendPath `
     -RedirectStandardOutput $logOut `
     -RedirectStandardError $logErr `
@@ -301,7 +315,7 @@ for ($i = 0; $i -lt 30; $i++) {
             break
         }
     } catch {
-        # Keep checking while the preview server starts.
+        # Continue while Vite starts.
     }
 
     if ($process.HasExited) {
@@ -315,7 +329,7 @@ if (-not $healthy) {
     throw 'Local frontend deployment failed its health check.'
 }
 
-Write-Host "Deployment verified at $env:LOCAL_APP_URL"
+Write-Host "Local deployment verified at $env:LOCAL_APP_URL"
 '''
 
                 bat 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy-local.ps1'
