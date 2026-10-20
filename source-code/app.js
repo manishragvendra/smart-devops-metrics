@@ -4,8 +4,8 @@ function calculateTotal(price, quantity) {
 
 function main() {
     const product = "Laptop";
-    const price = 5000000000000;
-    const quantity = 22;
+    const price = 500000;
+    const quantity = 21;
 
     const total = calculateTotal(price, quantity);
 
