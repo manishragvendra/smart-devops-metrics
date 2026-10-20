@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
 
@@ -12,6 +11,10 @@ pipeline {
         SONAR_HOST_URL = 'http://localhost:9000'
         SONAR_PROJECT_KEY = 'Smart-DevOps-Metrics'
         GITHUB_REPOSITORY = 'manishragvendra/smart-devops-metrics'
+
+        DORA_API = 'http://127.0.0.1:5000'
+        DORA_PROJECT_ID = '2'
+        LOCAL_APP_URL = 'http://127.0.0.1:4173'
     }
 
     stages {
@@ -20,6 +23,25 @@ pipeline {
                 bat 'node --version'
                 bat 'npm --version'
                 bat 'git --version'
+            }
+        }
+
+        stage('Capture Commit Metadata') {
+            steps {
+                script {
+                    env.COMMIT_SHA = bat(
+                        returnStdout: true,
+                        script: '@git rev-parse HEAD'
+                    ).trim()
+
+                    env.COMMIT_AT = bat(
+                        returnStdout: true,
+                        script: '@git log -1 --format=%cI HEAD'
+                    ).trim()
+
+                    echo "Commit: ${env.COMMIT_SHA}"
+                    echo "Commit time: ${env.COMMIT_AT}"
+                }
             }
         }
 
@@ -38,23 +60,18 @@ $message = (git log -1 --pretty=%s).Trim()
 $msgLen = $message.Length
 
 $repo = $env:GITHUB_REPOSITORY
-if (-not $repo) {
-    $repo = 'manishragvendra/smart-devops-metrics'
-}
-
 $event = 'push'
 
 $diff = @(git diff-tree --no-commit-id --numstat -r HEAD)
-
 $additions = 0
 $deletions = 0
 $filesModified = 0
 
 foreach ($line in $diff) {
     $parts = $line -split "`t"
+
     if ($parts.Length -ge 3) {
         $filesModified++
-
         $a = 0
         $d = 0
 
@@ -68,19 +85,21 @@ foreach ($line in $diff) {
     }
 }
 
-# Include the first parent when calculating changes for ordinary commits.
-# For merge commits, this still gives a consistent first-parent comparison.
 if ($filesModified -eq 0) {
     $diff = @(git diff --numstat HEAD^ HEAD 2>$null)
+
     foreach ($line in $diff) {
         $parts = $line -split "`t"
+
         if ($parts.Length -ge 3) {
             $filesModified++
             $a = 0
             $d = 0
+
             if ([int]::TryParse($parts[0], [ref]$a)) {
                 $additions += $a
             }
+
             if ([int]::TryParse($parts[1], [ref]$d)) {
                 $deletions += $d
             }
@@ -89,7 +108,6 @@ if ($filesModified -eq 0) {
 }
 
 $totalChurn = $additions + $deletions
-
 $commitTime = [long](git show -s --format=%ct HEAD)
 $previousTimeText = git show -s --format=%ct HEAD^ 2>$null
 $previousTime = 0
@@ -104,17 +122,6 @@ $buildNumber = $env:BUILD_NUMBER
 if (-not $buildNumber) {
     $buildNumber = 'unknown'
 }
-
-Write-Host '----------------------------------------'
-Write-Host 'Automatic ML Failure Prediction'
-Write-Host "Commit: $commit"
-Write-Host "Repository: $repo"
-Write-Host "Build number: $buildNumber"
-Write-Host "Files changed: $filesModified"
-Write-Host "Additions: $additions"
-Write-Host "Deletions: $deletions"
-Write-Host "Merge commit: $isMerge"
-Write-Host 'Requesting prediction from Express API...'
 
 $payloadObject = @{
     additions = $additions
@@ -134,6 +141,8 @@ $payloadObject = @{
 
 $payload = $payloadObject | ConvertTo-Json -Depth 5
 
+Write-Host 'Requesting ML prediction from Express API...'
+
 $result = Invoke-RestMethod `
     -Uri $env:ML_API_URL `
     -Method Post `
@@ -141,7 +150,7 @@ $result = Invoke-RestMethod `
     -Body $payload `
     -TimeoutSec 15
 
-if (-not $result.prediction) {
+if ($null -eq $result.prediction) {
     throw 'The prediction API returned no prediction.'
 }
 
@@ -149,18 +158,7 @@ $predictionDocument = @{
     commit = $commit
     repository = $repo
     generatedAt = (Get-Date).ToString('o')
-    metadata = @{
-        additions = $additions
-        deletions = $deletions
-        total_churn = $totalChurn
-        files_modified = $filesModified
-        msg_len = $msgLen
-        is_merge = $isMerge
-        num_parents = $numParents
-        time_since_last_commit = $timeSinceLastCommit
-        repo = $repo
-        event = $event
-    }
+    metadata = $payloadObject
     prediction = $result.prediction
     buildNumber = $buildNumber
 }
@@ -169,13 +167,10 @@ $predictionDocument |
     ConvertTo-Json -Depth 10 |
     Set-Content -Path 'ml-prediction.json' -Encoding UTF8
 
-Write-Host '----------------------------------------'
-Write-Host 'ML prediction response:'
 Get-Content 'ml-prediction.json'
-Write-Host 'Prediction saved to ml-prediction.json'
 '''
 
-                    bat 'powershell -NoProfile -ExecutionPolicy Bypass -File predict-commit.ps1'
+                    bat 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File predict-commit.ps1'
                 }
             }
         }
@@ -188,37 +183,41 @@ Write-Host 'Prediction saved to ml-prediction.json'
             }
         }
 
-        
-
-stage('Backend Tests') {
-    steps {
-        dir('backend') {
-            bat 'npm test'
+        stage('Backend Tests') {
+            steps {
+                dir('backend') {
+                    bat 'npm test'
+                }
+            }
+            post {
+                always {
+                    junit testResults: 'backend/test-results/junit.xml',
+                          allowEmptyResults: false
+                }
+            }
         }
-    }
-    post {
-        always {
-            junit testResults: 'backend/test-results/junit.xml',
-                  allowEmptyResults: false
-        }
-    }
-}
-       stage('Source Code Coverage') {
-    steps {
-        dir('backend') {
-            bat 'npx jest --config .\\jest.source-coverage.config.cjs --runInBand --no-cache'
-        }
-        powershell '''
-            $report = "coverage-source/lcov.info"
-            (Get-Content $report) -replace '^SF:.*example\\.js$', 'SF:source-code/example.js' |
-                Set-Content -Encoding ascii $report
-            Write-Host "Corrected LCOV source path:"
-            Select-String '^SF:' $report
-        '''
-    }
-}
 
+        stage('Source Code Coverage') {
+            steps {
+                dir('backend') {
+                    bat 'npx jest --config .\\jest.source-coverage.config.cjs --runInBand --no-cache'
+                }
 
+                powershell '''
+                    $report = "coverage-source/lcov.info"
+
+                    if (-not (Test-Path $report)) {
+                        throw "Coverage report not found: $report"
+                    }
+
+                    (Get-Content $report) -replace '^SF:.*example\\.js$', 'SF:source-code/example.js' |
+                        Set-Content -Encoding ascii $report
+
+                    Write-Host "Corrected LCOV source path:"
+                    Select-String '^SF:' $report
+                '''
+            }
+        }
 
         stage('SonarQube Analysis') {
             steps {
@@ -228,15 +227,131 @@ stage('Backend Tests') {
                         variable: 'SONAR_TOKEN'
                     )
                 ]) {
-                    withEnv(["SONAR_HOST_URL=${SONAR_HOST_URL}"]) {
-                        bat '''
+                    bat '''
 "C:\\sonar-scanner\\sonar-scanner-8.1.0.6389-windows-x64\\bin\\sonar-scanner.bat" ^
-  -Dsonar.projectKey=%SONAR_PROJECT_KEY% ^
-  -Dsonar.host.url=%SONAR_HOST_URL% ^
-  -Dsonar.token=%SONAR_TOKEN%
+ -Dsonar.projectKey=%SONAR_PROJECT_KEY% ^
+ -Dsonar.host.url=%SONAR_HOST_URL% ^
+ -Dsonar.token=%SONAR_TOKEN%
 '''
-                    }
                 }
+            }
+        }
+
+        stage('Frontend Dependencies and Build') {
+            steps {
+                dir('frontend') {
+                    bat 'npm ci'
+                    bat 'npm run build'
+                }
+            }
+        }
+
+        stage('Deploy Frontend Locally') {
+            steps {
+                writeFile file: 'deploy-local.ps1', text: '''
+$ErrorActionPreference = 'Stop'
+
+$port = 4173
+$frontendPath = Join-Path $env:WORKSPACE 'frontend'
+$logOut = Join-Path $env:WORKSPACE 'frontend-preview.log'
+$logErr = Join-Path $env:WORKSPACE 'frontend-preview-error.log'
+
+if (-not (Test-Path (Join-Path $frontendPath 'dist\\index.html'))) {
+    throw 'Frontend build output is missing.'
+}
+
+$listener = Get-NetTCPConnection `
+    -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+
+if ($listener) {
+    $existingProcess = Get-CimInstance Win32_Process `
+        -Filter "ProcessId = $($listener.OwningProcess)"
+
+    if (-not $existingProcess -or
+        $existingProcess.CommandLine -notmatch 'vite.*preview|vite\\.js.*preview') {
+        throw "Port $port is occupied by another process. No process was stopped."
+    }
+
+    Stop-Process -Id $listener.OwningProcess -Force
+    Start-Sleep -Seconds 2
+}
+
+$process = Start-Process `
+    -FilePath 'npm.cmd' `
+    -ArgumentList @('run', 'preview', '--', '--host', '127.0.0.1', '--port', "$port", '--strictPort') `
+    -WorkingDirectory $frontendPath `
+    -RedirectStandardOutput $logOut `
+    -RedirectStandardError $logErr `
+    -WindowStyle Hidden `
+    -PassThru
+
+$healthy = $false
+
+for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Seconds 2
+
+    try {
+        $response = Invoke-WebRequest `
+            -Uri $env:LOCAL_APP_URL `
+            -UseBasicParsing -TimeoutSec 3
+
+        if ($response.StatusCode -eq 200) {
+            $healthy = $true
+            break
+        }
+    } catch {
+        # Keep checking while the preview server starts.
+    }
+
+    if ($process.HasExited) {
+        break
+    }
+}
+
+if (-not $healthy) {
+    if (Test-Path $logOut) { Get-Content $logOut }
+    if (Test-Path $logErr) { Get-Content $logErr }
+    throw 'Local frontend deployment failed its health check.'
+}
+
+Write-Host "Deployment verified at $env:LOCAL_APP_URL"
+'''
+
+                bat 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy-local.ps1'
+            }
+        }
+
+        stage('Record DORA Deployment') {
+            steps {
+                writeFile file: 'record-dora.ps1', text: '''
+$ErrorActionPreference = 'Stop'
+
+$payload = @{
+    projectId = [int]$env:DORA_PROJECT_ID
+    commitSha = $env:COMMIT_SHA
+    commitAt = $env:COMMIT_AT
+    environment = 'local'
+    deployedAt = [DateTime]::UtcNow.ToString('o')
+    status = 'SUCCESS'
+    causedFailure = $false
+    source = 'jenkins'
+}
+
+$json = $payload | ConvertTo-Json -Depth 5
+
+$result = Invoke-RestMethod `
+    -Uri "$($env:DORA_API)/api/dora/deployments" `
+    -Method Post `
+    -ContentType 'application/json' `
+    -Body $json `
+    -TimeoutSec 10
+
+Write-Host 'DORA deployment event recorded.'
+Write-Host "Deployment ID: $($result.deploymentId)"
+'''
+
+                bat 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File record-dora.ps1'
             }
         }
     }
@@ -250,11 +365,11 @@ stage('Backend Tests') {
         }
 
         success {
-            echo 'Pipeline completed successfully.'
+            echo 'Pipeline completed successfully, including local deployment and DORA recording.'
         }
 
         failure {
-            echo 'Pipeline failed. Review Console Output.'
+            echo 'Pipeline failed. Review Console Output for the failing stage.'
         }
     }
 }
