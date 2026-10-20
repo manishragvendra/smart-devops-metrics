@@ -21,7 +21,8 @@ function testUnusedVariable() {
 }
 
 const unusedFunction = () => "not used";
-const unusedConstant = 400;
+const unusedConstant = 45
+;
 
 console.log(calculateTotal(100, 2));
 console.log(getUserName(null));
