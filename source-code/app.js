@@ -1,3 +1,4 @@
+
 function calculateTotal(price, quantity) {
     return price * quantity;
 }
@@ -16,4 +17,8 @@ function main() {
     console.log("JavaScript program executed successfully!");
 }
 
-main();
+if (require.main === module) {
+    main();
+}
+
+module.exports = { calculateTotal };
