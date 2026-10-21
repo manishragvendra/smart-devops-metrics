@@ -15,5 +15,8 @@ function main() {
     console.log("Total Amount: ₹" + total);
     console.log("JavaScript program executed successfully!");
 }
+if (require.main === module) {
+    main();
+}
 
-main();
+module.exports = { calculateTotal };
