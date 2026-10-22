@@ -213,9 +213,12 @@ Write-Host 'Prediction saved to ml-prediction.json'
 
         stage('Source Code Coverage') {
             steps {
-                dir('backend') {
-                    bat 'npx jest --config .\\jest.source-coverage.config.cjs --runInBand --no-cache'
-                }
+                dir('source-code') {
+    bat 'npm install'
+}
+dir('backend') {
+    bat 'npx jest --config .\\jest.source-coverage.config.cjs --runInBand --no-cache'
+}
 
                 powershell '''
                     $report = "coverage-source/lcov.info"
