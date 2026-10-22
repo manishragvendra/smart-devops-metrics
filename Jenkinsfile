@@ -217,7 +217,7 @@ Write-Host 'Prediction saved to ml-prediction.json'
     bat 'npm install'
 }
 dir('backend') {
-    bat 'npx jest --config .\\jest.source-coverage.config.cjs --runInBand --no-cache'
+    bat 'npx jest --config .\\jest.source-coverage.config.cjs --runInBand --no-cache --forceExit'
 }
 
                 powershell '''
