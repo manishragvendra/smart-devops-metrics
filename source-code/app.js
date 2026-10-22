@@ -6,7 +6,10 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Home API
+function calculateTotal(price, quantity) {
+  return price * quantity;
+}
+
 app.get("/", (req, res) => {
   res.json({
     project: "Sample JavaScript App",
@@ -15,7 +18,6 @@ app.get("/", (req, res) => {
   });
 });
 
-// Health check
 app.get("/health", (req, res) => {
   res.json({
     status: "healthy",
@@ -23,7 +25,6 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Sample calculation API
 app.get("/api/metrics", (req, res) => {
   res.json({
     projectName: "Sample JavaScript App",
@@ -33,6 +34,11 @@ app.get("/api/metrics", (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Sample app running at http://localhost:${PORT}`);
-});
+// Start the server only when this file is run directly.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Sample app running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = { app, calculateTotal };
