@@ -1,24 +1,38 @@
 
-function calculateTotal(price, quantity) {
-    return price * quantity;
-}
+const express = require("express");
 
-function main() {
-    const product = "Laptop";
-    const price = 500000;
-    const quantity = 17;
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-    const total = calculateTotal(price, quantity);
+app.use(express.json());
 
-    console.log("Product:", product);
-    console.log("Price:", price);
-    console.log("Quantity:", quantity);
-    console.log("Total Amount: ₹" + total);
-    console.log("JavaScript program executed successfully!");
-}
+// Home API
+app.get("/", (req, res) => {
+  res.json({
+    project: "Sample JavaScript App",
+    status: "Running",
+    message: "Welcome to the Smart DevOps Metrics test project!"
+  });
+});
 
-if (require.main === module) {
-    main();
-}
+// Health check
+app.get("/health", (req, res) => {
+  res.json({
+    status: "healthy",
+    timestamp: new Date().toISOString()
+  });
+});
 
-module.exports = { calculateTotal };
+// Sample calculation API
+app.get("/api/metrics", (req, res) => {
+  res.json({
+    projectName: "Sample JavaScript App",
+    totalRequests: 100,
+    successfulRequests: 95,
+    failedRequests: 5
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`Sample app running at http://localhost:${PORT}`);
+});
