@@ -29,8 +29,8 @@ app.get("/api/metrics", (req, res) => {
   res.json({
     projectName: "Sample JavaScript App",
     totalRequests: 100,
-    successfulRequests: 90,
-    failedRequests: 10
+    successfulRequests: 99,
+    failedRequests: 1
   });
 });
 
